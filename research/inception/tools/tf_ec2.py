@@ -6,13 +6,15 @@
 from __future__ import print_function
 import sys
 import threading
-import Queue
+#  import Queue
+import queue
 import paramiko as pm
 import boto3
 import time
 import json
 import os
 from scp import SCPClient
+from pprint import pprint
 
 class Cfg(dict):
 
@@ -24,120 +26,7 @@ class Cfg(dict):
            return item % self
        return item
 
-cfg = Cfg({
-    "name" : "Timeout",      # Unique name for this specific configuration
-    "key_name": "HongyiWKeyPair",          # Necessary to ssh into created instances
-
-    # Cluster topology
-    "n_masters" : 1,                      # Should always be 1
-    "n_workers" : 8,
-    "n_ps" : 1,
-    "n_evaluators" : 1,                   # Continually validates the model on the validation data
-    "num_replicas_to_aggregate" : "9",
-
-    "method" : "reserved",
-
-    # Region speficiation
-    "region" : "us-west-2",
-    "availability_zone" : "us-west-2a",
-
-    # Machine type - instance type configuration.
-    "master_type" : "g2.2xlarge",
-    "worker_type" : "g2.2xlarge",
-    "ps_type" : "g2.2xlarge",
-    "evaluator_type" : "g2.2xlarge",
-#    "image_id": "ami-2306ba43",
-    "image_id": "ami-fbb8399b",
-
-    # Launch specifications
-    "spot_price" : "0.22",                 # Has to be a string
-
-    # SSH configuration
-    "ssh_username" : "ubuntu",            # For sshing. E.G: ssh ssh_username@hostname
-    "path_to_keyfile" : "/home/hwang/My_Code/AWS_keys/HongyiWKeyPair.pem",
-
-    # NFS configuration
-    # To set up these values, go to Services > ElasticFileSystem > Create new filesystem, and follow the directions.
-    #"nfs_ip_address" : "172.31.3.173",         # us-west-2c
-    #"nfs_ip_address" : "172.31.35.0",          # us-west-2a
-    "nfs_ip_address" : "172.31.28.54",          # us-west-2b
-    "nfs_mount_point" : "/home/ubuntu/inception_shared",       # NFS base dir
-    "base_out_dir" : "%(nfs_mount_point)s/%(name)s", # Master writes checkpoints to this directory. Outfiles are written to this directory.
-
-    "setup_commands" :
-    [
-        "sudo rm -rf %(base_out_dir)s",
-        "mkdir %(base_out_dir)s",
-    ],
-
-    # Command specification
-    # Master pre commands are run only by the master
-    "master_pre_commands" :
-    [
-        "cd distributed_tensorflow/DistributedLeNet",
-        "git fetch && git reset --hard origin/master",
-    ],
-
-    # Pre commands are run on every machine before the actual training.
-    "pre_commands" :
-    [
-        "cd distributed_tensorflow/DistributedLeNet",
-        "git fetch && git reset --hard origin/master",
-    ],
-
-    # Model configuration
-    "batch_size" : "8192",
-    "max_steps" : "1500",
-    "initial_learning_rate" : ".001",
-    "learning_rate_decay_factor" : ".95",
-    "num_epochs_per_decay" : "1.0",
-
-    # Train command specifies how the ps/workers execute tensorflow.
-    # PS_HOSTS - special string replaced with actual list of ps hosts.
-    # TASK_ID - special string replaced with actual task index.
-    # JOB_NAME - special string replaced with actual job name.
-    # WORKER_HOSTS - special string replaced with actual list of worker hosts
-    # ROLE_ID - special string replaced with machine's identity (E.G: master, worker0, worker1, ps, etc)
-    # %(...)s - Inserts self referential string value.
-    "train_commands" :
-    [
-        "python src/mnist_distributed_train.py "
-        "--batch_size=%(batch_size)s "
-        "--initial_learning_rate=%(initial_learning_rate)s "
-        "--learning_rate_decay_factor=%(learning_rate_decay_factor)s "
-        "--num_epochs_per_decay=%(num_epochs_per_decay)s "
-        "--train_dir=%(base_out_dir)s/train_dir "
-        "--max_steps=%(max_steps)s "
-        "--worker_hosts='WORKER_HOSTS' "
-        "--ps_hosts='PS_HOSTS' "
-        "--task_id=TASK_ID "
-        "--timeline_logging=false "
-        "--interval_method=false "
-        "--worker_times_cdf_method=false "
-        "--interval_ms=1200 "
-        "--num_replicas_to_aggregate=%(num_replicas_to_aggregate)s "
-        "--job_name=JOB_NAME > %(base_out_dir)s/out_ROLE_ID 2>&1 &"
-    ],
-
-    # Commands to run on the evaluator
-    "evaluate_commands" :
-    [
-        # Sleep a bit
-        "sleep 30",
-
-        # Evaluation command
-        "python src/mnist_eval.py "
-        "--eval_dir=%(base_out_dir)s/eval_dir "
-        "--checkpoint_dir=%(base_out_dir)s/train_dir "
-        "> %(base_out_dir)s/out_evaluator 2>&1 &",
-
-        # Tensorboard command
-        "python /usr/local/lib/python2.7/dist-packages/tensorflow/tensorboard/tensorboard.py "
-        " --logdir=%(base_out_dir)s/train_dir/ "
-        #" --logdir=%(base_out_dir)s/eval_dir/ "
-        "> %(base_out_dir)s/out_evaluator_tensorboard 2>&1 &"
-    ],
-})
+import argparse
 
 def tf_ec2_run(argv, configuration):
 
@@ -807,6 +696,128 @@ def tf_ec2_run(argv, configuration):
     command = argv[1]
     return command_map[command](argv)
 
+cfg = Cfg({
+    "name" : "tf-cluster",      # Unique name for this specific configuration
+    # TODO: change this to your key
+    "key_name": "scott-key-dim",          # Necessary to ssh into created instances
+
+    # Cluster topology
+    "n_masters" : 1,                      # Should always be 1
+    "n_workers" : 8,
+    "n_ps" : 1,
+    "n_evaluators" : 1,                   # Continually validates the model on the validation data
+    "num_replicas_to_aggregate" : "9",
+
+    "method" : "reserved",
+
+    # Region speficiation
+    # DONE: change this?
+    "region" : "us-west-2",
+    "availability_zone" : "us-west-2b",
+
+    # Machine type - instance type configuration.
+    "master_type" : "g2.2xlarge",
+    "worker_type" : "g2.2xlarge",
+    "ps_type" : "g2.2xlarge",
+    "evaluator_type" : "g2.2xlarge",
+    "image_id": "ami-ceb545b6",  # AMI with Jupyter + anaconda + CUDA from Amazon's Deep learning
+    # DONE: set up own AMI ID
+
+    # Launch specifications
+    "spot_price" : "0.22",                 # Has to be a string
+
+    # SSH configuration
+    # DONE: change both these lines
+    "ssh_username": "ec2-user",            # For sshing. E.G: ssh ssh_username@hostname
+    "path_to_keyfile": "/Users/scott/Work/Developer/AWS/scott-key-dim.pem",
+
+    # NFS configuration
+    # To set up these values, go to Services > ElasticFileSystem > Create new filesystem, and follow the directions.
+    # DONE: set up your own NFS file directory
+    "nfs_ip_address" : "172.31.27.72",  # us-west-2b
+    "nfs_mount_point" : "/home/ec2-user/inception_shared",       # NFS base dir
+    "base_out_dir" : "%(nfs_mount_point)s/%(name)s", # Master writes checkpoints to this directory. Outfiles are written to this directory.
+
+    # TODO: change setup_commands
+    "setup_commands" :
+    [
+        "sudo rm -rf %(base_out_dir)s",
+        "mkdir %(base_out_dir)s",
+    ],
+
+    # Command specification
+    # Master pre commands are run only by the master
+    # TODO
+    "master_pre_commands" :
+    [
+        "cd distributed_tensorflow/DistributedLeNet",
+        "git fetch && git reset --hard origin/master",
+    ],
+
+    # Pre commands are run on every machine before the actual training.
+    # TODO
+    "pre_commands" :
+    [
+        "cd distributed_tensorflow/DistributedLeNet",
+        "git fetch && git reset --hard origin/master",
+    ],
+
+    # Model configuration
+    # TODO: make these command line args
+    "batch_size" : "1024",
+    "max_steps" : "1500",
+    "initial_learning_rate" : "0.001",
+    "learning_rate_decay_factor" : ".95",
+    "num_epochs_per_decay" : "1.0",
+
+    # Train command specifies how the ps/workers execute tensorflow.
+    # PS_HOSTS - special string replaced with actual list of ps hosts.
+    # TASK_ID - special string replaced with actual task index.
+    # JOB_NAME - special string replaced with actual job name.
+    # WORKER_HOSTS - special string replaced with actual list of worker hosts
+    # ROLE_ID - special string replaced with machine's identity (E.G: master, worker0, worker1, ps, etc)
+    # %(...)s - Inserts self referential string value.
+    "train_commands" :
+    [
+        "python src/mnist_distributed_train.py "
+        "--batch_size=%(batch_size)s "
+        "--initial_learning_rate=%(initial_learning_rate)s "
+        "--learning_rate_decay_factor=%(learning_rate_decay_factor)s "
+        "--num_epochs_per_decay=%(num_epochs_per_decay)s "
+        "--train_dir=%(base_out_dir)s/train_dir "
+        "--max_steps=%(max_steps)s "
+        "--worker_hosts='WORKER_HOSTS' "
+        "--ps_hosts='PS_HOSTS' "
+        "--task_id=TASK_ID "
+        "--timeline_logging=false "
+        "--interval_method=false "
+        "--worker_times_cdf_method=false "
+        "--interval_ms=1200 "
+        "--num_replicas_to_aggregate=%(num_replicas_to_aggregate)s "
+        "--job_name=JOB_NAME > %(base_out_dir)s/out_ROLE_ID 2>&1 &"
+    ],
+
+    # Commands to run on the evaluator
+    "evaluate_commands" :
+    [
+        # Sleep a bit
+        "sleep 30",
+
+        # Evaluation command
+        "python src/mnist_eval.py "
+        "--eval_dir=%(base_out_dir)s/eval_dir "
+        "--checkpoint_dir=%(base_out_dir)s/train_dir "
+        "> %(base_out_dir)s/out_evaluator 2>&1 &",
+
+        # Tensorboard command
+        "python /usr/local/lib/python2.7/dist-packages/tensorflow/tensorboard/tensorboard.py "
+        " --logdir=%(base_out_dir)s/train_dir/ "
+        #" --logdir=%(base_out_dir)s/eval_dir/ "
+        "> %(base_out_dir)s/out_evaluator_tensorboard 2>&1 &"
+    ],
+})
 if __name__ == "__main__":
-    print(cfg)
+    pprint(cfg)
+    pprint(sys.argv)
+    #  sys.exit()
     tf_ec2_run(sys.argv, cfg)
